@@ -79,26 +79,43 @@ def solve(question: str, image_path: str, ans_type: str, options: list) -> str:
         description = desc_response.choices[0].message.content
     description = description.strip() if description else "(no description available)"
 
-    # Step 2: Two answer attempts with different prompt styles
+    # Step 2: Answer
     if ans_type == "choice" and options:
-        labels = ['A', 'B', 'C', 'D']
-        opts = "\n".join(f"{labels[i]}. {o}" for i, o in enumerate(options))
-        prompt_a = f"""Here is a detailed description of the image:
+        # Check if options are just letters (A, B, C, D)
+        all_letters = all(len(o) == 1 and o in 'ABCD' for o in options)
+        n = len(options)
+        labels = ['A', 'B', 'C', 'D'][:n]
+
+        if all_letters:
+            prompt_a = f"""Here is a detailed description of the image:
 {description}
 
-Now answer this question about the image:
+{question}
+
+The options are shown in the image as {', '.join(labels)}.
+
+First, describe what you see in EACH option ({', '.join(labels)}) separately.
+Then, explain step by step which option is correct and why.
+Finally, give your final answer as ONLY a single letter ({', '.join(labels)}) on the last line."""
+        else:
+            opts = "\n".join(f"{labels[i]}. {o}" for i, o in enumerate(options))
+            prompt_a = f"""Here is a detailed description of the image:
+{description}
+
 {question}
 
 Options:
 {opts}
 
-Think step by step, then give your final answer as ONLY the option letter (A, B, C, or D). Put your final answer on the last line."""
-        # For choice, just use one attempt (model bias is consistent)
+First, describe what you see for each option.
+Then, explain step by step which option is correct and why.
+Finally, give your final answer as ONLY a single letter ({', '.join(labels)}) on the last line."""
+
         response = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": [img_url, {"type": "text", "text": prompt_a}]}],
             temperature=0,
-            max_completion_tokens=1024,
+            max_completion_tokens=1500,
         )
         raw_output = response.choices[0].message.content.strip()
         answer = extract_answer(raw_output, ans_type)
