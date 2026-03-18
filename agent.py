@@ -1,5 +1,6 @@
 """BabyVision solver — visual reasoning on early visual understanding tasks.
 
+Strategy: Grid transcription for counting + single-shot describe-each-option for choice.
 Takes a JSON task on stdin (question, image_path, ans_type, options), prints the answer on stdout.
 Saves full LLM trajectory to eval_results/trajectories/<index>.json if EVAL_TRAJECTORY_DIR is set.
 """
