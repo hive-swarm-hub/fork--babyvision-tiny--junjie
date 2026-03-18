@@ -163,7 +163,7 @@ X X . . X
 
 Be very precise — examine each cell/element carefully."""
 
-            # Run grid transcription 3 times with slightly different prompts, take max
+            # Run grid transcription twice with slightly different prompts, take max
             grid_text1 = api_call(client, model, [{"role": "user", "content": [img_url, {"type": "text", "text": grid_prompt}]}], temperature=0, max_tokens=2048)
             grid_count1 = grid_text1.count('X') if grid_text1 else 0
 
@@ -171,13 +171,9 @@ Be very precise — examine each cell/element carefully."""
             grid_text2 = api_call(client, model, [{"role": "user", "content": [img_url, {"type": "text", "text": grid_prompt2}]}], temperature=0.1, max_tokens=2048)
             grid_count2 = grid_text2.count('X') if grid_text2 else 0
 
-            # Third attempt with detail:high for better perception
-            grid_text3 = api_call(client, model, [{"role": "user", "content": [hi_url, {"type": "text", "text": grid_prompt}]}], temperature=0, max_tokens=2048)
-            grid_count3 = grid_text3.count('X') if grid_text3 else 0
-
             # Take max (model tends to under-mark)
-            grid_count = max(grid_count1, grid_count2, grid_count3)
-            grid_text = f"COUNT1={grid_count1} COUNT2={grid_count2} COUNT3={grid_count3} MAX={grid_count}"
+            grid_count = max(grid_count1, grid_count2)
+            grid_text = f"COUNT1={grid_count1} COUNT2={grid_count2} MAX={grid_count}"
 
             if grid_count > 0:
                 answer = str(grid_count)
@@ -196,7 +192,7 @@ Be very precise — examine each cell/element carefully."""
             # Non-grid counting: combine multi-turn analysis + direct prompts, majority vote
             all_answers = []
 
-            # Approach 1: Multi-turn systematic counting (3 samples)
+            # Approach 1: Multi-turn systematic counting (only if analysis succeeds)
             count_msgs = [
                 {"role": "user", "content": [
                     img_url,
@@ -204,15 +200,17 @@ Be very precise — examine each cell/element carefully."""
                 ]},
             ]
             analysis = api_call(client, model, count_msgs, temperature=0, max_tokens=1024)
-            count_msgs.append({"role": "assistant", "content": analysis})
-            count_msgs.append({"role": "user", "content": "Now count your list carefully and give the total. Put ONLY the number on the last line."})
-
-            for _ in range(3):
-                resp = client.chat.completions.create(
-                    model=model, messages=count_msgs, temperature=0.3, max_completion_tokens=256,
-                    seed=42,
-                )
-                all_answers.append(extract_answer(resp.choices[0].message.content.strip(), ans_type))
+            if analysis and len(analysis) > 10:
+                count_msgs.append({"role": "assistant", "content": analysis})
+                count_msgs.append({"role": "user", "content": "Now count your list carefully and give the total. Put ONLY the number on the last line."})
+                for _ in range(3):
+                    resp = client.chat.completions.create(
+                        model=model, messages=count_msgs, temperature=0.3, max_completion_tokens=256,
+                        seed=42,
+                    )
+                    content = resp.choices[0].message.content
+                    if content and content.strip():
+                        all_answers.append(extract_answer(content.strip(), ans_type))
 
             # Approach 2: Direct prompts with detail:high (2 samples)
             resp_a = client.chat.completions.create(
@@ -222,7 +220,9 @@ Be very precise — examine each cell/element carefully."""
                 max_completion_tokens=1024,
                 seed=42,
             )
-            all_answers.append(extract_answer(resp_a.choices[0].message.content.strip(), ans_type))
+            content_a = resp_a.choices[0].message.content
+            if content_a and content_a.strip():
+                all_answers.append(extract_answer(content_a.strip(), ans_type))
 
             prompt_count = f"""Image description: {description}
 
@@ -237,11 +237,18 @@ Put ONLY the final count number on the last line."""
                 max_completion_tokens=1024,
                 seed=42,
             )
-            all_answers.append(extract_answer(resp_b.choices[0].message.content.strip(), ans_type))
+            content_b = resp_b.choices[0].message.content
+            if content_b and content_b.strip():
+                all_answers.append(extract_answer(content_b.strip(), ans_type))
 
-            counts = Counter(all_answers)
+            # Filter out empty/zero answers for counting
+            valid_answers = [a for a in all_answers if a and a != '0']
+            if not valid_answers:
+                valid_answers = all_answers if all_answers else ['0']
+
+            counts = Counter(valid_answers)
             answer = counts.most_common(1)[0][0]
-            raw_output = f"samples={all_answers} picked={answer}"
+            raw_output = f"samples={all_answers} valid={valid_answers} picked={answer}"
         else:
             # Non-counting blank: dual prompts, prefer A
             prompt_b = f"""Here is a detailed description of the image:
