@@ -163,7 +163,7 @@ X X . . X
 
 Be very precise — examine each cell/element carefully."""
 
-            # Run grid transcription twice with slightly different prompts, take max
+            # Run grid transcription 3 times with slightly different prompts, take max
             grid_text1 = api_call(client, model, [{"role": "user", "content": [img_url, {"type": "text", "text": grid_prompt}]}], temperature=0, max_tokens=2048)
             grid_count1 = grid_text1.count('X') if grid_text1 else 0
 
@@ -171,9 +171,13 @@ Be very precise — examine each cell/element carefully."""
             grid_text2 = api_call(client, model, [{"role": "user", "content": [img_url, {"type": "text", "text": grid_prompt2}]}], temperature=0.1, max_tokens=2048)
             grid_count2 = grid_text2.count('X') if grid_text2 else 0
 
+            # Third attempt with detail:high for better perception
+            grid_text3 = api_call(client, model, [{"role": "user", "content": [hi_url, {"type": "text", "text": grid_prompt}]}], temperature=0, max_tokens=2048)
+            grid_count3 = grid_text3.count('X') if grid_text3 else 0
+
             # Take max (model tends to under-mark)
-            grid_count = max(grid_count1, grid_count2)
-            grid_text = f"COUNT1={grid_count1} COUNT2={grid_count2} MAX={grid_count}\n---\n{grid_text1}\n---\n{grid_text2}"
+            grid_count = max(grid_count1, grid_count2, grid_count3)
+            grid_text = f"COUNT1={grid_count1} COUNT2={grid_count2} COUNT3={grid_count3} MAX={grid_count}"
 
             if grid_count > 0:
                 answer = str(grid_count)
