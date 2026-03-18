@@ -10,7 +10,6 @@ import json
 import base64
 import re
 import io
-from collections import Counter
 
 from openai import OpenAI
 from PIL import Image
@@ -75,25 +74,10 @@ def solve(question: str, image_path: str, ans_type: str, options: list) -> str:
     hi_url = {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}", "detail": "high"}}
     model = os.environ.get("SOLVER_MODEL", "gpt-5.4-mini")
 
-    # Step 1: Describe image (multi-turn: this becomes conversation context)
-    desc_messages = [{"role": "user", "content": [hi_url,
-        {"type": "text", "text": "Describe this image in detail. Focus on: the layout/grid structure, all visual elements (shapes, colors, patterns, numbers, letters), positions of elements, any differences or similarities between elements, and any spatial relationships. Be thorough and precise."}
-    ]}]
-    description = api_call(client, model, desc_messages, temperature=0, max_tokens=2048)
-    if not description:
-        # Retry without detail:high
-        desc_messages = [{"role": "user", "content": [img_url,
-            {"type": "text", "text": "Describe this image in detail. Focus on: the layout/grid structure, all visual elements (shapes, colors, patterns, numbers, letters), positions of elements, any differences or similarities between elements, and any spatial relationships. Be thorough and precise."}
-        ]}]
-        description = api_call(client, model, desc_messages, temperature=0, max_tokens=2048)
-    if not description:
-        description = "(no description available)"
-
-    # Step 2: Multi-turn answer with image + description context
     if ans_type == "choice" and options:
-        answer, raw_output = solve_choice(client, model, question, options, description, img_url, hi_url, desc_messages)
+        answer, raw_output = solve_choice(client, model, question, options, img_url, hi_url)
     else:
-        answer, raw_output = solve_blank(client, model, question, description, img_url, desc_messages)
+        answer, raw_output = solve_blank(client, model, question, img_url, hi_url)
 
     # Save trajectory
     traj_dir = os.environ.get("EVAL_TRAJECTORY_DIR")
@@ -102,7 +86,7 @@ def solve(question: str, image_path: str, ans_type: str, options: list) -> str:
         os.makedirs(traj_dir, exist_ok=True)
         with open(os.path.join(traj_dir, f"{idx}.json"), "w") as f:
             json.dump({
-                "index": int(idx), "model": model, "description": description,
+                "index": int(idx), "model": model,
                 "question": question, "image_path": image_path,
                 "ans_type": ans_type, "options": options,
                 "raw_response": raw_output, "parsed_answer": answer,
@@ -111,78 +95,61 @@ def solve(question: str, image_path: str, ans_type: str, options: list) -> str:
     return answer
 
 
-def solve_choice(client, model, question, options, description, img_url, hi_url, desc_messages):
-    """Solve choice using multi-turn conversation."""
+def solve_choice(client, model, question, options, img_url, hi_url):
+    """Solve choice: direct reasoning with image."""
     n = len(options)
     labels = ['A', 'B', 'C', 'D'][:n]
     all_letters = all(len(o) == 1 and o in 'ABCD' for o in options)
 
-    # Build multi-turn: description as first turn, answer as second
-    messages = list(desc_messages)
-    messages.append({"role": "assistant", "content": description})
-
     if all_letters:
-        answer_prompt = f"""Now answer this question about the image:
-{question}
+        prompt = f"""{question}
 
 The options are shown in the image as {', '.join(labels)}.
 
-First, describe what you see in EACH option ({', '.join(labels)}) separately and in detail.
-Then, explain step by step which option is correct and why, comparing each option against the requirements.
-Finally, give your final answer as ONLY a single letter ({', '.join(labels)}) on the last line."""
+Look at the image very carefully. First, describe what you see in EACH option ({', '.join(labels)}) separately and in detail. Then, explain step by step which option is correct and why, comparing each option against the requirements. Finally, give your final answer as ONLY a single letter ({', '.join(labels)}) on the last line."""
     else:
         opts = "\n".join(f"{labels[i]}. {o}" for i, o in enumerate(options))
-        answer_prompt = f"""Now answer this question about the image:
-{question}
+        prompt = f"""{question}
 
 Options:
 {opts}
 
-First, describe what you see for each option in detail.
-Then, explain step by step which option is correct and why.
-Finally, give your final answer as ONLY a single letter ({', '.join(labels)}) on the last line."""
+Look at the image very carefully. First, describe what you see for each option. Then, explain step by step which option is correct and why. Finally, give your final answer as ONLY a single letter ({', '.join(labels)}) on the last line."""
 
-    messages.append({"role": "user", "content": [img_url, {"type": "text", "text": answer_prompt}]})
-
-    raw = api_call(client, model, messages, temperature=0, max_tokens=1500)
+    raw = api_call(client, model,
+        [{"role": "user", "content": [hi_url, {"type": "text", "text": prompt}]}],
+        temperature=0, max_tokens=2048)
     answer = extract_choice(raw)
     return answer, raw
 
 
-def solve_blank(client, model, question, description, img_url, desc_messages):
-    """Solve blank with 2 prompts + multi-turn approach."""
+def solve_blank(client, model, question, img_url, hi_url):
+    """Solve blank: direct reasoning with image, 2 prompts."""
     q_lower = question.lower()
     is_counting = any(w in q_lower for w in ["how many", "count", "pass through", "total"])
 
-    # Approach 1: Multi-turn (description context + answer)
-    messages = list(desc_messages)
-    messages.append({"role": "assistant", "content": description})
-
     if is_counting:
-        answer_prompt = f"""{question}
+        prompt_a = f"""{question}
 
-Count methodically:
+Look at the image very carefully. Count methodically:
 1. Identify exactly what needs to be counted
 2. Go row by row (or section by section), listing each item with its position
 3. Sum up the total
-4. Double-check by counting again
+4. Double-check by counting again from a different starting point
 
 Put ONLY the final count number on the last line."""
     else:
-        answer_prompt = f"""{question}
+        prompt_a = f"""{question}
 
-Think step by step. Pay close attention to the exact format requested in the question.
-Give your final answer in the exact format requested. Put ONLY the answer value on the last line."""
+Look at the image very carefully. Think step by step. Pay close attention to the exact format requested in the question. Give your final answer in the exact format requested. Put ONLY the answer value on the last line."""
 
-    messages.append({"role": "user", "content": [img_url, {"type": "text", "text": answer_prompt}]})
-    raw_a = api_call(client, model, messages, temperature=0, max_tokens=1024)
+    raw_a = api_call(client, model,
+        [{"role": "user", "content": [hi_url, {"type": "text", "text": prompt_a}]}],
+        temperature=0, max_tokens=2048)
     answer_a = extract_blank(raw_a)
 
-    # Approach 2: Single-turn with different framing
+    # Second prompt with different framing
     prompt_b = f"""Question: {question}
-
-Image analysis notes:
-{description}
 
 Look at the image carefully. Think step by step. Give your final answer in the exact format requested. Put ONLY the answer value on the last line."""
 
@@ -194,18 +161,18 @@ Look at the image carefully. Think step by step. Give your final answer in the e
     if answer_a == answer_b:
         return answer_a, raw_a
 
-    # Tiebreak: for counting prefer higher (models undercount), otherwise prefer multi-turn
+    # Tiebreak: for counting prefer higher (models undercount), otherwise prefer prompt A (detail:high)
     if is_counting:
         try:
             va, vb = int(answer_a), int(answer_b)
             if va >= vb:
-                return answer_a, f"A={answer_a} B={answer_b} PICKED=A(multi-turn)"
+                return answer_a, f"A={answer_a} B={answer_b} PICKED=A(hi-detail)"
             else:
                 return answer_b, f"A={answer_a} B={answer_b} PICKED=B(higher)"
         except ValueError:
             pass
 
-    return answer_a, f"A={answer_a} B={answer_b} PICKED=A(multi-turn)"
+    return answer_a, f"A={answer_a} B={answer_b} PICKED=A(hi-detail)"
 
 
 if __name__ == "__main__":
