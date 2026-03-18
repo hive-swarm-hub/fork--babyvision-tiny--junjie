@@ -10,6 +10,7 @@ import json
 import base64
 import re
 import io
+from collections import Counter
 
 from openai import OpenAI
 from PIL import Image
@@ -96,7 +97,7 @@ def solve(question: str, image_path: str, ans_type: str, options: list) -> str:
 
 
 def solve_choice(client, model, question, options, img_url, hi_url):
-    """Solve choice: direct reasoning with image."""
+    """Solve choice with 5-vote majority voting at temp=0.3."""
     n = len(options)
     labels = ['A', 'B', 'C', 'D'][:n]
     all_letters = all(len(o) == 1 and o in 'ABCD' for o in options)
@@ -116,18 +117,57 @@ Options:
 
 Look at the image very carefully. First, describe what you see for each option. Then, explain step by step which option is correct and why. Finally, give your final answer as ONLY a single letter ({', '.join(labels)}) on the last line."""
 
-    raw = api_call(client, model,
-        [{"role": "user", "content": [hi_url, {"type": "text", "text": prompt}]}],
-        temperature=0, max_tokens=2048)
-    answer = extract_choice(raw)
-    return answer, raw
+    # 5-vote majority at temp=0.3
+    votes = []
+    raws = []
+    for _ in range(5):
+        raw = api_call(client, model,
+            [{"role": "user", "content": [hi_url, {"type": "text", "text": prompt}]}],
+            temperature=0.3, max_tokens=2048)
+        ans = extract_choice(raw)
+        votes.append(ans)
+        raws.append(raw)
+
+    counts = Counter(votes)
+    winner = counts.most_common(1)[0][0]
+    raw_output = f"votes={votes} winner={winner}\n{raws[0]}"
+    return winner, raw_output
+
+
+def is_grid_counting(question):
+    """Check if this is a grid-based counting problem."""
+    q = question.lower()
+    if not any(w in q for w in ["how many", "count"]):
+        return False
+    if any(w in q for w in ["square", "pattern"]):
+        if any(w in q for w in ["3d", "block", "cube"]):
+            return False
+        return True
+    return False
 
 
 def solve_blank(client, model, question, img_url, hi_url):
-    """Solve blank: direct reasoning with image, 2 prompts."""
+    """Solve blank with grid transcription for counting + direct reasoning."""
     q_lower = question.lower()
     is_counting = any(w in q_lower for w in ["how many", "count", "pass through", "total"])
 
+    # Grid transcription for grid-based counting
+    if is_grid_counting(question):
+        grid_prompt = f"""Look at this image carefully. The question is: {question}
+
+Your task: Transcribe the image as a grid/matrix. For EACH element in the image, write 'X' if it matches what needs to be counted, or '.' if it doesn't.
+
+Write the grid row by row. One row per line. Use only 'X' and '.' characters separated by spaces.
+Be very precise — examine each cell/element carefully."""
+
+        grid_text = api_call(client, model,
+            [{"role": "user", "content": [hi_url, {"type": "text", "text": grid_prompt}]}],
+            temperature=0, max_tokens=2048)
+        programmatic_count = grid_text.count('X')
+        if programmatic_count > 0:
+            return str(programmatic_count), f"GRID_COUNT={programmatic_count}\n{grid_text}"
+
+    # Standard approach: 2 prompts
     if is_counting:
         prompt_a = f"""{question}
 
@@ -148,7 +188,6 @@ Look at the image very carefully. Think step by step. Pay close attention to the
         temperature=0, max_tokens=2048)
     answer_a = extract_blank(raw_a)
 
-    # Second prompt with different framing
     prompt_b = f"""Question: {question}
 
 Look at the image carefully. Think step by step. Give your final answer in the exact format requested. Put ONLY the answer value on the last line."""
@@ -161,7 +200,6 @@ Look at the image carefully. Think step by step. Give your final answer in the e
     if answer_a == answer_b:
         return answer_a, raw_a
 
-    # Tiebreak: for counting prefer higher (models undercount), otherwise prefer prompt A (detail:high)
     if is_counting:
         try:
             va, vb = int(answer_a), int(answer_b)
