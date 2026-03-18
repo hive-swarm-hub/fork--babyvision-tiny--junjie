@@ -140,9 +140,8 @@ def get_counting_type(question):
         return None
     if any(w in q for w in ["3d", "block", "cube", "stack"]):
         return "3d"
-    if any(w in q for w in ["pass through", "point"]):
-        return "path"
-    if any(w in q for w in ["square", "pattern", "car", "driv"]):
+    # Grid transcription works for pattern grids, car counting, and point-line counting
+    if any(w in q for w in ["square", "pattern", "car", "driv", "pass through", "point"]):
         return "grid"
     return "other"
 
@@ -170,20 +169,6 @@ Be very precise — examine each cell/element carefully."""
         if programmatic_count > 0:
             return str(programmatic_count), f"GRID_COUNT={programmatic_count}\n{grid_text}"
 
-    # Path tracing for line/point counting
-    if counting_type == "path":
-        path_prompt = f"""Look at this image carefully. {question}
-
-Trace the line/path from start to end. At each point where the line passes through a dot/intersection, write "Point N: (description)".
-
-List EVERY point the line passes through, numbering them sequentially.
-At the end, write the total count on the last line as ONLY a number."""
-
-        raw = api_call(client, model,
-            [{"role": "user", "content": [hi_url, {"type": "text", "text": path_prompt}]}],
-            temperature=0, max_tokens=2048)
-        answer = extract_blank(raw)
-        return answer, raw
 
     # Standard approach: 2 prompts
     if is_counting:
