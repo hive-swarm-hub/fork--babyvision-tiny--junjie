@@ -33,15 +33,12 @@ def extract_choice(raw_output):
     lines = [l.strip() for l in raw_output.split("\n") if l.strip()]
     answer_line = lines[-1] if lines else raw_output
     letter_map = {'A': '0', 'B': '1', 'C': '2', 'D': '3'}
-    # Check last line for letter
     m = re.search(r'\b([A-D])\b', answer_line)
     if m and m.group(1) in letter_map:
         return letter_map[m.group(1)]
-    # Check last line for digit
     m = re.search(r'\b([0-3])\b', answer_line)
     if m:
         return m.group(1)
-    # Search from end of full output
     for line in reversed(lines):
         m = re.search(r'\b([A-D])\b', line)
         if m and m.group(1) in letter_map:
@@ -78,24 +75,19 @@ def solve(question: str, image_path: str, ans_type: str, options: list) -> str:
     hi_url = {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}", "detail": "high"}}
     model = os.environ.get("SOLVER_MODEL", "gpt-5.4-mini")
 
-    # Step 1: Describe image
-    description = api_call(client, model,
-        [{"role": "user", "content": [hi_url,
-            {"type": "text", "text": "Describe this image in detail. Focus on: the layout/grid structure, all visual elements (shapes, colors, patterns, numbers, letters), positions of elements, any differences or similarities between elements, and any spatial relationships. Be thorough and precise."}
-        ]}], temperature=0, max_tokens=512)
-    if not description:
-        description = api_call(client, model,
-            [{"role": "user", "content": [img_url,
-                {"type": "text", "text": "Describe this image in detail. Focus on layout, elements, positions, differences."}
-            ]}], temperature=0, max_tokens=300)
+    # Step 1: Describe image (multi-turn: this becomes conversation context)
+    desc_messages = [{"role": "user", "content": [hi_url,
+        {"type": "text", "text": "Describe this image in detail. Focus on: the layout/grid structure, all visual elements (shapes, colors, patterns, numbers, letters), positions of elements, any differences or similarities between elements, and any spatial relationships. Be thorough and precise."}
+    ]}]
+    description = api_call(client, model, desc_messages, temperature=0, max_tokens=512)
     if not description:
         description = "(no description available)"
 
-    # Step 2: Answer
+    # Step 2: Multi-turn answer with image + description context
     if ans_type == "choice" and options:
-        answer, raw_output = solve_choice(client, model, question, options, description, img_url)
+        answer, raw_output = solve_choice(client, model, question, options, description, img_url, hi_url, desc_messages)
     else:
-        answer, raw_output = solve_blank(client, model, question, description, img_url)
+        answer, raw_output = solve_blank(client, model, question, description, img_url, desc_messages)
 
     # Save trajectory
     traj_dir = os.environ.get("EVAL_TRAJECTORY_DIR")
@@ -113,16 +105,18 @@ def solve(question: str, image_path: str, ans_type: str, options: list) -> str:
     return answer
 
 
-def solve_choice(client, model, question, options, description, img_url):
-    """Solve choice with describe-each-option approach."""
+def solve_choice(client, model, question, options, description, img_url, hi_url, desc_messages):
+    """Solve choice using multi-turn conversation."""
     n = len(options)
     labels = ['A', 'B', 'C', 'D'][:n]
     all_letters = all(len(o) == 1 and o in 'ABCD' for o in options)
 
-    if all_letters:
-        prompt = f"""Here is a detailed description of the image:
-{description}
+    # Build multi-turn: description as first turn, answer as second
+    messages = list(desc_messages)
+    messages.append({"role": "assistant", "content": description})
 
+    if all_letters:
+        answer_prompt = f"""Now answer this question about the image:
 {question}
 
 The options are shown in the image as {', '.join(labels)}.
@@ -132,9 +126,7 @@ Then, explain step by step which option is correct and why, comparing each optio
 Finally, give your final answer as ONLY a single letter ({', '.join(labels)}) on the last line."""
     else:
         opts = "\n".join(f"{labels[i]}. {o}" for i, o in enumerate(options))
-        prompt = f"""Here is a detailed description of the image:
-{description}
-
+        answer_prompt = f"""Now answer this question about the image:
 {question}
 
 Options:
@@ -144,75 +136,70 @@ First, describe what you see for each option in detail.
 Then, explain step by step which option is correct and why.
 Finally, give your final answer as ONLY a single letter ({', '.join(labels)}) on the last line."""
 
-    raw = api_call(client, model,
-        [{"role": "user", "content": [img_url, {"type": "text", "text": prompt}]}],
-        temperature=0, max_tokens=1500)
+    messages.append({"role": "user", "content": [img_url, {"type": "text", "text": answer_prompt}]})
+
+    raw = api_call(client, model, messages, temperature=0, max_tokens=1500)
     answer = extract_choice(raw)
     return answer, raw
 
 
-def solve_blank(client, model, question, description, img_url):
-    """Solve blank with 3-prompt voting."""
+def solve_blank(client, model, question, description, img_url, desc_messages):
+    """Solve blank with 2 prompts + multi-turn approach."""
     q_lower = question.lower()
     is_counting = any(w in q_lower for w in ["how many", "count", "pass through", "total"])
 
-    # Prompt A: question-first
-    prompt_a = f"""Question: {question}
+    # Approach 1: Multi-turn (description context + answer)
+    messages = list(desc_messages)
+    messages.append({"role": "assistant", "content": description})
+
+    if is_counting:
+        answer_prompt = f"""{question}
+
+Count methodically:
+1. Identify exactly what needs to be counted
+2. Go row by row (or section by section), listing each item with its position
+3. Sum up the total
+4. Double-check by counting again
+
+Put ONLY the final count number on the last line."""
+    else:
+        answer_prompt = f"""{question}
+
+Think step by step. Pay close attention to the exact format requested in the question.
+Give your final answer in the exact format requested. Put ONLY the answer value on the last line."""
+
+    messages.append({"role": "user", "content": [img_url, {"type": "text", "text": answer_prompt}]})
+    raw_a = api_call(client, model, messages, temperature=0, max_tokens=1024)
+    answer_a = extract_blank(raw_a)
+
+    # Approach 2: Single-turn with different framing
+    prompt_b = f"""Question: {question}
 
 Image analysis notes:
 {description}
 
 Look at the image carefully. Think step by step. Give your final answer in the exact format requested. Put ONLY the answer value on the last line."""
 
-    # Prompt B: counting-specific or description-first
+    raw_b = api_call(client, model,
+        [{"role": "user", "content": [img_url, {"type": "text", "text": prompt_b}]}],
+        temperature=0, max_tokens=1024)
+    answer_b = extract_blank(raw_b)
+
+    if answer_a == answer_b:
+        return answer_a, raw_a
+
+    # Tiebreak: for counting prefer higher (models undercount), otherwise prefer multi-turn
     if is_counting:
-        prompt_b = f"""Image description: {description}
+        try:
+            va, vb = int(answer_a), int(answer_b)
+            if va >= vb:
+                return answer_a, f"A={answer_a} B={answer_b} PICKED=A(multi-turn)"
+            else:
+                return answer_b, f"A={answer_a} B={answer_b} PICKED=B(higher)"
+        except ValueError:
+            pass
 
-{question}
-
-IMPORTANT: Before giving your count, list each item you're counting with its approximate position (e.g., "row 1: item at col 2, item at col 5"). Then total them up.
-Put ONLY the final count number on the last line."""
-    else:
-        prompt_b = f"""Here is a detailed description of the image:
-{description}
-
-Now answer this question about the image:
-{question}
-
-Think step by step, then give your final answer in the exact format requested. Put your final answer on the last line, with ONLY the answer value and nothing else."""
-
-    # Prompt C: direct with image emphasis
-    prompt_c = f"""{question}
-
-I have analyzed the image and here are my notes:
-{description}
-
-Now, looking at the image again very carefully, I need to answer the question above.
-Let me work through this step by step, being very precise about what I see.
-
-My final answer (in the exact format requested, ONLY the answer value on the last line):"""
-
-    answers = []
-    raws = []
-    for prompt in [prompt_a, prompt_b, prompt_c]:
-        raw = api_call(client, model,
-            [{"role": "user", "content": [img_url, {"type": "text", "text": prompt}]}],
-            temperature=0, max_tokens=1024)
-        ans = extract_blank(raw)
-        answers.append(ans)
-        raws.append(raw)
-
-    # Majority vote
-    counts = Counter(answers)
-    winner, count = counts.most_common(1)[0]
-    if count >= 2:
-        answer = winner
-    else:
-        # No majority — prefer prompt A
-        answer = answers[0]
-
-    raw_output = f"votes={answers} winner={answer}\n{raws[0]}"
-    return answer, raw_output
+    return answer_a, f"A={answer_a} B={answer_b} PICKED=A(multi-turn)"
 
 
 if __name__ == "__main__":
