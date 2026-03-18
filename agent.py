@@ -151,7 +151,9 @@ def get_counting_type(question):
         return None
     if any(w in q for w in ["3d", "block", "cube", "stack"]):
         return "3d"
-    if any(w in q for w in ["square", "pattern", "car", "driv", "pass through", "point"]):
+    if any(w in q for w in ["pass through", "point"]):
+        return "line"
+    if any(w in q for w in ["square", "pattern", "car", "driv"]):
         return "grid"
     return "other"
 
@@ -163,13 +165,40 @@ def solve_blank(client, model, question, description, img_url, hi_url, desc_mess
 
     counting_type = get_counting_type(question)
 
-    # Grid transcription for grid/object counting
+    # Line-tracing grid transcription (for "pass through" / "point" counting)
+    if counting_type == "line":
+        grid_prompt = f"""{question}
+
+The image shows dots arranged in a grid with lines connecting some of them. Your task: for EACH dot in the grid, write 'X' if the line passes through it, or '.' if it doesn't.
+
+Write the grid of dots row by row from top to bottom, left to right. Use 'X' for dots the line passes through, '.' for dots it doesn't.
+One row per line. Separate with spaces.
+Example format:
+. X . X .
+X X . . X
+. . X . .
+
+Be very precise — trace the line carefully through each dot."""
+
+        grid_text = api_call(client, model,
+            [{"role": "user", "content": [img_url, {"type": "text", "text": grid_prompt}]}],
+            temperature=0, max_tokens=2048)
+        programmatic_count = grid_text.count('X')
+        if programmatic_count > 0:
+            return str(programmatic_count), f"GRID_COUNT={programmatic_count}\n{grid_text}"
+
+    # Standard grid transcription for grid/object counting
     if counting_type == "grid":
         grid_prompt = f"""Look at this image carefully. The question is: {question}
 
 Your task: Transcribe the image as a grid/matrix. For EACH element in the image, write 'X' if it matches what needs to be counted, or '.' if it doesn't.
 
 Write the grid row by row. One row per line. Use only 'X' and '.' characters separated by spaces.
+Example format:
+. X . X .
+X X . . X
+. . X . .
+
 Be very precise — examine each cell/element carefully."""
 
         grid_text = api_call(client, model,
