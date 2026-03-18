@@ -117,20 +117,11 @@ Options:
 
 Look at the image very carefully. First, describe what you see for each option. Then, explain step by step which option is correct and why. Finally, give your final answer as ONLY a single letter ({', '.join(labels)}) on the last line."""
 
-    # 3-vote majority at temp=0.1
-    votes = []
-    raws = []
-    for _ in range(3):
-        raw = api_call(client, model,
-            [{"role": "user", "content": [hi_url, {"type": "text", "text": prompt}]}],
-            temperature=0.1, max_tokens=2048)
-        ans = extract_choice(raw)
-        votes.append(ans)
-        raws.append(raw)
-
-    counts = Counter(votes)
-    winner = counts.most_common(1)[0][0]
-    return winner, f"votes={votes} winner={winner}\n{raws[0]}"
+    raw = api_call(client, model,
+        [{"role": "user", "content": [hi_url, {"type": "text", "text": prompt}]}],
+        temperature=0, max_tokens=2048)
+    answer = extract_choice(raw)
+    return answer, raw
 
 
 def get_counting_type(question):
