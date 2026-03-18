@@ -27,16 +27,22 @@ def load_image_b64(image_path: str, min_size: int = 768) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def extract_answer(raw_output, ans_type):
+def extract_answer(raw_output, ans_type, num_options=0):
     """Extract and clean the answer from model output."""
     lines = [l.strip() for l in raw_output.split("\n") if l.strip()]
     answer = lines[-1] if lines else raw_output
     answer = re.sub(r'\s*,\s*', ',', answer)
     answer = answer.rstrip('.')
     if ans_type == "choice":
-        m = re.search(r'\b([0-4])\b', answer)
-        if m:
-            answer = m.group(1)
+        # Try to find a letter answer (A, B, C, D) and convert to 0-indexed
+        letter_map = {'A': '0', 'B': '1', 'C': '2', 'D': '3'}
+        m = re.search(r'\b([A-D])\b', answer)
+        if m and m.group(1) in letter_map:
+            answer = letter_map[m.group(1)]
+        else:
+            m = re.search(r'\b([0-4])\b', answer)
+            if m:
+                answer = m.group(1)
     return answer
 
 
@@ -75,8 +81,8 @@ def solve(question: str, image_path: str, ans_type: str, options: list) -> str:
 
     # Step 2: Two answer attempts with different prompt styles
     if ans_type == "choice" and options:
-        opts = "\n".join(f"{i}. {o}" for i, o in enumerate(options))
-        n = len(options) - 1
+        labels = ['A', 'B', 'C', 'D']
+        opts = "\n".join(f"{labels[i]}. {o}" for i, o in enumerate(options))
         prompt_a = f"""Here is a detailed description of the image:
 {description}
 
@@ -86,7 +92,7 @@ Now answer this question about the image:
 Options:
 {opts}
 
-Think step by step, then give your final answer as ONLY the option number (0, 1, 2, or {n}). Put your final answer on the last line."""
+Think step by step, then give your final answer as ONLY the option letter (A, B, C, or D). Put your final answer on the last line."""
         # For choice, just use one attempt (model bias is consistent)
         response = client.chat.completions.create(
             model=model,
