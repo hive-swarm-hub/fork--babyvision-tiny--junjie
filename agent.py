@@ -75,7 +75,8 @@ def solve(question: str, image_path: str, ans_type: str, options: list) -> str:
 
     # Step 2: Two answer attempts with different prompt styles
     if ans_type == "choice" and options:
-        opts = "\n".join(f"{i+1}. {o}" for i, o in enumerate(options))
+        opts = "\n".join(f"{i}. {o}" for i, o in enumerate(options))
+        n = len(options) - 1
         prompt_a = f"""Here is a detailed description of the image:
 {description}
 
@@ -85,7 +86,7 @@ Now answer this question about the image:
 Options:
 {opts}
 
-Think step by step, then give your final answer as ONLY the option number (1, 2, 3, or 4). Put your final answer on the last line."""
+Think step by step, then give your final answer as ONLY the option number (0, 1, 2, or {n}). Put your final answer on the last line."""
         # For choice, just use one attempt (model bias is consistent)
         response = client.chat.completions.create(
             model=model,
