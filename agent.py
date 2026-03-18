@@ -117,23 +117,34 @@ Options:
 
 Look at the image very carefully. First, describe what you see for each option. Then, explain step by step which option is correct and why. Finally, give your final answer as ONLY a single letter ({', '.join(labels)}) on the last line."""
 
-    raw = api_call(client, model,
-        [{"role": "user", "content": [hi_url, {"type": "text", "text": prompt}]}],
-        temperature=0, max_tokens=2048)
-    answer = extract_choice(raw)
-    return answer, raw
+    # 3-vote majority at temp=0.1
+    votes = []
+    raws = []
+    for _ in range(3):
+        raw = api_call(client, model,
+            [{"role": "user", "content": [hi_url, {"type": "text", "text": prompt}]}],
+            temperature=0.1, max_tokens=2048)
+        ans = extract_choice(raw)
+        votes.append(ans)
+        raws.append(raw)
+
+    counts = Counter(votes)
+    winner = counts.most_common(1)[0][0]
+    return winner, f"votes={votes} winner={winner}\n{raws[0]}"
 
 
-def is_grid_counting(question):
-    """Check if this is a grid-based counting problem."""
+def get_counting_type(question):
+    """Classify counting problem type."""
     q = question.lower()
-    if not any(w in q for w in ["how many", "count"]):
-        return False
-    if any(w in q for w in ["square", "pattern"]):
-        if any(w in q for w in ["3d", "block", "cube"]):
-            return False
-        return True
-    return False
+    if not any(w in q for w in ["how many", "count", "pass through", "total"]):
+        return None
+    if any(w in q for w in ["3d", "block", "cube", "stack"]):
+        return "3d"
+    if any(w in q for w in ["pass through", "point"]):
+        return "path"
+    if any(w in q for w in ["square", "pattern", "car", "driv"]):
+        return "grid"
+    return "other"
 
 
 def solve_blank(client, model, question, img_url, hi_url):
@@ -141,8 +152,10 @@ def solve_blank(client, model, question, img_url, hi_url):
     q_lower = question.lower()
     is_counting = any(w in q_lower for w in ["how many", "count", "pass through", "total"])
 
-    # Grid transcription for grid-based counting
-    if is_grid_counting(question):
+    counting_type = get_counting_type(question)
+
+    # Grid transcription for grid/object counting
+    if counting_type == "grid":
         grid_prompt = f"""Look at this image carefully. The question is: {question}
 
 Your task: Transcribe the image as a grid/matrix. For EACH element in the image, write 'X' if it matches what needs to be counted, or '.' if it doesn't.
@@ -156,6 +169,21 @@ Be very precise — examine each cell/element carefully."""
         programmatic_count = grid_text.count('X')
         if programmatic_count > 0:
             return str(programmatic_count), f"GRID_COUNT={programmatic_count}\n{grid_text}"
+
+    # Path tracing for line/point counting
+    if counting_type == "path":
+        path_prompt = f"""Look at this image carefully. {question}
+
+Trace the line/path from start to end. At each point where the line passes through a dot/intersection, write "Point N: (description)".
+
+List EVERY point the line passes through, numbering them sequentially.
+At the end, write the total count on the last line as ONLY a number."""
+
+        raw = api_call(client, model,
+            [{"role": "user", "content": [hi_url, {"type": "text", "text": path_prompt}]}],
+            temperature=0, max_tokens=2048)
+        answer = extract_blank(raw)
+        return answer, raw
 
     # Standard approach: 2 prompts
     if is_counting:
