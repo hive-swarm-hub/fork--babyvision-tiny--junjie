@@ -79,7 +79,13 @@ def solve(question: str, image_path: str, ans_type: str, options: list) -> str:
     desc_messages = [{"role": "user", "content": [hi_url,
         {"type": "text", "text": "Describe this image in detail. Focus on: the layout/grid structure, all visual elements (shapes, colors, patterns, numbers, letters), positions of elements, any differences or similarities between elements, and any spatial relationships. Be thorough and precise."}
     ]}]
-    description = api_call(client, model, desc_messages, temperature=0, max_tokens=512)
+    description = api_call(client, model, desc_messages, temperature=0, max_tokens=2048)
+    if not description:
+        # Retry without detail:high
+        desc_messages = [{"role": "user", "content": [img_url,
+            {"type": "text", "text": "Describe this image in detail. Focus on: the layout/grid structure, all visual elements (shapes, colors, patterns, numbers, letters), positions of elements, any differences or similarities between elements, and any spatial relationships. Be thorough and precise."}
+        ]}]
+        description = api_call(client, model, desc_messages, temperature=0, max_tokens=2048)
     if not description:
         description = "(no description available)"
 
