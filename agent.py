@@ -97,7 +97,7 @@ def solve(question: str, image_path: str, ans_type: str, options: list) -> str:
 
 
 def solve_choice(client, model, question, options, img_url, hi_url):
-    """Solve choice with 5-vote majority voting at temp=0.3."""
+    """Solve choice with single-shot at temp=0."""
     n = len(options)
     labels = ['A', 'B', 'C', 'D'][:n]
     all_letters = all(len(o) == 1 and o in 'ABCD' for o in options)
@@ -117,21 +117,11 @@ Options:
 
 Look at the image very carefully. First, describe what you see for each option. Then, explain step by step which option is correct and why. Finally, give your final answer as ONLY a single letter ({', '.join(labels)}) on the last line."""
 
-    # 5-vote majority at temp=0.3
-    votes = []
-    raws = []
-    for _ in range(5):
-        raw = api_call(client, model,
-            [{"role": "user", "content": [hi_url, {"type": "text", "text": prompt}]}],
-            temperature=0.3, max_tokens=2048)
-        ans = extract_choice(raw)
-        votes.append(ans)
-        raws.append(raw)
-
-    counts = Counter(votes)
-    winner = counts.most_common(1)[0][0]
-    raw_output = f"votes={votes} winner={winner}\n{raws[0]}"
-    return winner, raw_output
+    raw = api_call(client, model,
+        [{"role": "user", "content": [hi_url, {"type": "text", "text": prompt}]}],
+        temperature=0, max_tokens=2048)
+    answer = extract_choice(raw)
+    return answer, raw
 
 
 def is_grid_counting(question):
