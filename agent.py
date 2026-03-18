@@ -155,7 +155,7 @@ Write the grid row by row. One row per line. Use only 'X' and '.' characters sep
 Be very precise — examine each cell/element carefully."""
 
         grid_text = api_call(client, model,
-            [{"role": "user", "content": [hi_url, {"type": "text", "text": grid_prompt}]}],
+            [{"role": "user", "content": [img_url, {"type": "text", "text": grid_prompt}]}],
             temperature=0, max_tokens=2048)
         programmatic_count = grid_text.count('X')
         if programmatic_count > 0:
